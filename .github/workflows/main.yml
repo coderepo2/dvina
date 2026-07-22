@@ -59,7 +59,6 @@ jobs:
         run: |
           curl -sfL 'https://raw.githubusercontent.com/orcasecurity/orca-cli/main/install.sh' \
             | bash -s -- -b /usr/local/bin "${ORCA_CLI_VERSION}"
-          orca-cli version
 
       - name: Run ${{ matrix.scan.name }}
         env:
