@@ -1,21 +1,87 @@
-name: IaC Scan Demo Pipeline
+# ============================================================
+#  Orca AppSec — GitHub Actions
+#  SAST · Secrets (full git history) · SCA · IaC · Container image
+#
+#  Setup (one time):
+#   1. Orca UI: Settings > API Tokens > Create > "Shift Left User" role.
+#      Scope it to your AppSec project (NOT an empty entity).
+#   2. GitHub: repo Settings > Secrets and variables > Actions >
+#      New repository secret  ->  name: ORCA_SECURITY_API_TOKEN
+#   3. Set PROJECT_KEY below to your Orca project key.
+#
+#  Gating: any scan that violates policy exits 3 and FAILS the check,
+#  which blocks the PR (with branch protection / required checks on).
+#  Rollout tip: to run warn-only first, append `--exit-code 0` to the
+#  orca-cli commands, then remove it to start enforcing.
+# ============================================================
+name: Orca AppSec
+
 on:
-  push:
-    branches:
-      - main
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
+  push:
+    branches: [ main ]
   workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save minutes
+concurrency:
+  group: orca-appsec-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_KEY: default       # <-- set your Orca project key
+  ORCA_CLI_VERSION: v1.56.0           # pin a version for reproducible builds
+
 jobs:
-  orca-iac-scan-job:
-    name: IaC Security Scan
+  # ---- Code scans run in parallel; each is its own PR check ----
+  code-scan:
+    name: ${{ matrix.scan.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false                # let every scan report, don't stop at the first failure
+      matrix:
+        scan:
+          - { name: SAST,    cmd: "sast scan --path ." }
+          - { name: Secrets, cmd: "secrets scan --path ." }
+          - { name: SCA,     cmd: "sca scan ." }
+          - { name: IaC,     cmd: "iac scan --path ." }
     steps:
-    - uses: actions/checkout@v2
-    - name: Orca IaC Security Scan
-      uses: orcasecurity/shiftleft-iac-action@v1
-      with:
-          api_token: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
-          project_key: "default"
-          path: "iac"
+      - name: Checkout (full history — required for the Secrets git-history scan)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Orca CLI (${{ env.ORCA_CLI_VERSION }})
+        run: |
+          curl -sfL 'https://raw.githubusercontent.com/orcasecurity/orca-cli/main/install.sh' \
+            | bash -s -- -b /usr/local/bin "${ORCA_CLI_VERSION}"
+          orca-cli version
+
+      - name: Run ${{ matrix.scan.name }}
+        env:
+          ORCA_SECURITY_API_TOKEN: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
+        run: orca-cli --project-key "${PROJECT_KEY}" ${{ matrix.scan.cmd }}
+
+  # ---- Build the image, then scan it (CVEs + Docker best-practice + embedded secrets) ----
+  image-scan:
+    name: Container Image
+    runs-on: ubuntu-latest            # Docker is preinstalled; no socket mount needed
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t "${{ github.event.repository.name }}:${{ github.sha }}" .
+
+      - name: Install Orca CLI (${{ env.ORCA_CLI_VERSION }})
+        run: |
+          curl -sfL 'https://raw.githubusercontent.com/orcasecurity/orca-cli/main/install.sh' \
+            | bash -s -- -b /usr/local/bin "${ORCA_CLI_VERSION}"
+
+      - name: Scan image
+        env:
+          ORCA_SECURITY_API_TOKEN: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
+        run: orca-cli --project-key "${PROJECT_KEY}" image scan "${{ github.event.repository.name }}:${{ github.sha }}"
