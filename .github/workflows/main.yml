@@ -32,8 +32,9 @@ permissions:
   contents: read
 
 env:
-  PROJECT_KEY: default       # <-- set your Orca project key
-  ORCA_CLI_VERSION: v1.56.0           # pin a version for reproducible builds
+  PROJECT_KEY: default        # <-- set your Orca project key
+  # Use "latest", or pin a real tag from https://github.com/orcasecurity/orca-cli/releases
+  ORCA_CLI_VERSION: latest
 
 jobs:
   # ---- Code scans run in parallel; each is its own PR check ----
